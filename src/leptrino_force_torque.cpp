@@ -84,6 +84,8 @@ UCHAR CommRcvBuff[256];
 UCHAR CommSendBuff[1024];
 UCHAR SendBuff[512];
 double conversion_factor[FN_Num];
+double offset[FN_Num];
+int cntOffset=0;
 
 std::string g_com_port;
 int g_rate;
@@ -105,7 +107,7 @@ int main(int argc, char** argv)
   if (!nh_private.getParam("rate", g_rate))
   {
     ROS_WARN("Rate is not defined, using maximum 1.2 kHz");
-    g_rate = 1200;
+    g_rate = 500;
   }
   ros::Rate rate(g_rate);
 
@@ -180,6 +182,8 @@ int main(int argc, char** argv)
     }
   }
 
+  
+
   ros::Publisher force_torque_pub = nh_private.advertise<geometry_msgs::WrenchStamped>("force_torque", 1);
 
   usleep(10000);
@@ -215,27 +219,37 @@ int main(int argc, char** argv)
       rt = Comm_GetRcvData(CommRcvBuff);
       if (rt > 0)
       {
-        stForce = (ST_R_DATA_GET_F *)CommRcvBuff;
-        ROS_DEBUG_THROTTLE(0.1, "%d,%d,%d,%d,%d,%d", stForce->ssForce[0], stForce->ssForce[1], stForce->ssForce[2],
-                           stForce->ssForce[3], stForce->ssForce[4], stForce->ssForce[5]);
+        if(cntOffset<3000){
+          ROS_INFO_ONCE("3 seconds for calibration");
+          stForce = (ST_R_DATA_GET_F *)CommRcvBuff;
+          for(int i=0;i<6;i++){
+            offset[i] += (double)stForce->ssForce[i]/3000.0;
+          }
+        }
+        else{
+          ROS_INFO_ONCE("Ready and start publishing...");
+          stForce = (ST_R_DATA_GET_F *)CommRcvBuff;
+          ROS_DEBUG_THROTTLE(0.1, "%d,%d,%d,%d,%d,%d", stForce->ssForce[0], stForce->ssForce[1], stForce->ssForce[2],
+                            stForce->ssForce[3], stForce->ssForce[4], stForce->ssForce[5]);
 
-        geometry_msgs::WrenchStampedPtr msg(new geometry_msgs::WrenchStamped);
-        msg->header.stamp = ros::Time::now();
-        msg->header.frame_id = frame_id;
-        msg->wrench.force.x = stForce->ssForce[0] * conversion_factor[0];
-        msg->wrench.force.y = stForce->ssForce[1] * conversion_factor[1];
-        msg->wrench.force.z = stForce->ssForce[2] * conversion_factor[2];
-        msg->wrench.torque.x = stForce->ssForce[3] * conversion_factor[3];
-        msg->wrench.torque.y = stForce->ssForce[4] * conversion_factor[4];
-        msg->wrench.torque.z = stForce->ssForce[5] * conversion_factor[5];
-        force_torque_pub.publish(msg);
+          geometry_msgs::WrenchStampedPtr msg(new geometry_msgs::WrenchStamped);
+          msg->header.stamp = ros::Time::now();
+          msg->header.frame_id = frame_id;
+          msg->wrench.force.x = (stForce->ssForce[0]+ (offset[0]*-1)) * conversion_factor[0] ;
+          msg->wrench.force.y = (stForce->ssForce[1]+ (offset[1]*-1)) * conversion_factor[1];
+          msg->wrench.force.z = (stForce->ssForce[2]+ (offset[2]*-1)) * conversion_factor[2];
+          msg->wrench.torque.x = (stForce->ssForce[3]+ (offset[3]*-1)) * conversion_factor[3];
+          msg->wrench.torque.y = (stForce->ssForce[4]+ (offset[4]*-1)) * conversion_factor[4];
+          msg->wrench.torque.z = (stForce->ssForce[5]+ (offset[5]*-1)) * conversion_factor[5];
+          force_torque_pub.publish(msg);
+        }
       }
+      cntOffset++;
     }
     else
     {
       rate.sleep();
     }
-
     ros::spinOnce();
   } //while
 

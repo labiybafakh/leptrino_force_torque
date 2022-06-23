@@ -1,5 +1,7 @@
 <launch>
-  <arg name="comport" default="/dev/ttyUSB0" />
+  <arg name="comport" default="/dev/ttyACM0" />
+  <!-- <arg name="rate" value="100"/> -->
+  <!-- <param name="rate" value="100"/> -->
   <node pkg="leptrino_force_torque" type="leptrino_force_torque" name="leptrino_force_torque" output="screen">
   	<param name="com_port" value="$(arg comport)" />  	  	
   </node>
