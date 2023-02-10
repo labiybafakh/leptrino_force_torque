@@ -69,13 +69,13 @@ typedef struct ST_SystemInfo
 // =============================================================================
 //  プロトタイプ宣言 Declaring prototypes
 // =============================================================================
-void App_Init(void);
-void App_Close(rclcpp::Logger logger);
-ULONG SendData(UCHAR *pucInput, USHORT usSize);
-void GetProductInfo(rclcpp::Logger logger);
-void GetLimit(rclcpp::Logger logger);
-void SerialStart(rclcpp::Logger logger);
-void SerialStop(rclcpp::Logger logger);
+// void App_Init(void);
+// void App_Close(rclcpp::Logger logger);
+// ULONG SendData(UCHAR *pucInput, USHORT usSize);
+// void GetProductInfo(rclcpp::Logger logger);
+// void GetLimit(rclcpp::Logger logger);
+// void SerialStart(rclcpp::Logger logger);
+// void SerialStop(rclcpp::Logger logger);
 
 // =============================================================================
 //  モジュール変数定義 Defining module variables
@@ -86,28 +86,172 @@ UCHAR CommSendBuff[1024];
 UCHAR SendBuff[512];
 double conversion_factor[FN_Num];
 
-std::string g_com_port;
-int g_rate;
+std::string g_com_port="/dev/ttyACM0";
+int g_rate=1000;
 
 #define TEST_TIME 0
+
+class LeptrinoNode : public rclcpp::Node{
+  private:
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr wrench_pub_;
+    rclcpp::TimerBase::SharedPtr timer_;
+    void AppInit();
+    void App_Close(rclcpp::Logger logger);
+    ULONG SendData(UCHAR *pucInput, USHORT usSize);
+    void GetProductInfo(rclcpp::Logger logger);
+    void GetLimit(rclcpp::Logger logger);
+    void SerialStart(rclcpp::Logger logger);
+    void SerialStop(rclcpp::Logger logger);
+
+  public:
+    LetrinoNode();
+
+}
+
+void LeptrinoNode::App_Init()
+{
+  int rt;
+
+  //Commポート初期化
+  gSys.com_ok = NG;
+  rt = Comm_Open(g_com_port.c_str());
+  if (rt == OK)
+  {
+    Comm_Setup(460800, PAR_NON, BIT_LEN_8, 0, 0, CHR_ETX);
+    gSys.com_ok = OK;
+  }
+
+}
+
+void LeptrinoNode::App_Close(rclcpp::Logger logger)
+{
+  RCLCPP_DEBUG(logger, "Application close\n");
+
+  if (gSys.com_ok == OK)
+  {
+    Comm_Close();
+  }
+}
+
+ULONG LeptrinoNode::SendData(UCHAR *pucInput, USHORT usSize)
+{
+  USHORT usCnt;
+  UCHAR ucWork;
+  UCHAR ucBCC = 0;
+  UCHAR *pucWrite = &CommSendBuff[0];
+  USHORT usRealSize;
+
+  // データ整形
+  *pucWrite = CHR_DLE; // DLE
+  pucWrite++;
+  *pucWrite = CHR_STX; // STX
+  pucWrite++;
+  usRealSize = 2;
+
+  for (usCnt = 0; usCnt < usSize; usCnt++)
+  {
+    ucWork = pucInput[usCnt];
+    if (ucWork == CHR_DLE)
+    { // データが0x10ならば0x10を付加
+      *pucWrite = CHR_DLE; // DLE付加
+      pucWrite++; // 書き込み先
+      usRealSize++; // 実サイズ
+      // BCCは計算しない!
+    }
+    *pucWrite = ucWork; // データ
+    ucBCC ^= ucWork; // BCC
+    pucWrite++; // 書き込み先
+    usRealSize++; // 実サイズ
+  }
+
+  *pucWrite = CHR_DLE; // DLE
+  pucWrite++;
+  *pucWrite = CHR_ETX; // ETX
+  ucBCC ^= CHR_ETX; // BCC計算
+  pucWrite++;
+  *pucWrite = ucBCC; // BCC付加
+  usRealSize += 3;
+
+  Comm_SendData(&CommSendBuff[0], usRealSize);
+
+  return OK;
+}
+
+void LeptrinoNode::GetProductInfo(rclcpp::Logger logger)
+{
+  USHORT len;
+
+  RCLCPP_INFO(logger, "Get sensor information");
+  len = 0x04; // データ長
+  SendBuff[0] = len; // レングス
+  SendBuff[1] = 0xFF; // センサNo.
+  SendBuff[2] = CMD_GET_INF; // コマンド種別
+  SendBuff[3] = 0; // 予備
+
+  SendData(SendBuff, len);
+}
+
+void LeptrinoNode::GetLimit(rclcpp::Logger logger)
+{
+  USHORT len;
+
+  RCLCPP_INFO(logger, "Get sensor limit");
+  len = 0x04;
+  SendBuff[0] = len; // レングス length
+  SendBuff[1] = 0xFF; // センサNo. Sensor no.
+  SendBuff[2] = CMD_GET_LIMIT; // コマンド種別 Command type
+  SendBuff[3] = 0; // 予備 reserve
+
+  SendData(SendBuff, len);
+}
+
+void LeptrinoNode::SerialStart(rclcpp::Logger logger)
+{
+  USHORT len;
+
+  RCLCPP_INFO(logger, "Start sensor");
+  len = 0x04; // データ長
+  SendBuff[0] = len; // レングス
+  SendBuff[1] = 0xFF; // センサNo.
+  SendBuff[2] = CMD_DATA_START; // コマンド種別
+  SendBuff[3] = 0; // 予備
+
+  SendData(SendBuff, len);
+}
+
+void LeptrinoNode::SerialStop(rclcpp::Logger logger)
+{
+  USHORT len;
+
+  RCLCPP_INFO(logger, "Stop sensor\n");
+  len = 0x04; // データ長
+  SendBuff[0] = len; // レングス
+  SendBuff[1] = 0xFF; // センサNo.
+  SendBuff[2] = CMD_DATA_STOP; // コマンド種別
+  SendBuff[3] = 0; // 予備
+
+  SendData(SendBuff, len);
+}
+
 
 int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::Node::SharedPtr node = rclcpp::Node::make_shared("leptrino");
-  rclcpp::Node::SharedPtr nh_private = rclcpp::Node::make_shared("~");
+  rclcpp::Node::SharedPtr node = rclcpp::Node::make_shared<LeptrinoNode>();
+  rclcpp::Node::SharedPtr nh_private = rclcpp::Node::make_shared("_");
 
-  if (!nh_private->get_parameter("com_port", g_com_port))
-  {
-    RCLCPP_WARN(node->get_logger(), "Port is not defined, trying /dev/ttyUSB0");
-    g_com_port = "/dev/ttyUSB0";
-  }
+  // if (!nh_private->get_parameter("com_port", g_com_port))
+  // {
+  //   RCLCPP_WARN(node->get_logger(), "Port is not defined, trying /dev/ttyACM0");
+  //   g_com_port = "/dev/ttyACM0";
+  // }
 
-  if (!nh_private->get_parameter("rate", g_rate))
-  {
-    RCLCPP_WARN(node->get_logger(), "Rate is not defined, using maximum 1.2 kHz");
-    g_rate = 1200;
-  }
+  // if (!nh_private->get_parameter("rate", g_rate))
+  // {
+  //   RCLCPP_WARN(node->get_logger(), "Rate is not defined, using maximum 1.2 kHz");
+  //   g_rate = 1200;
+  // }
+  
   rclcpp::Rate rate(g_rate);
 
   std::string frame_id = "leptrino";
@@ -235,6 +379,8 @@ int main(int argc, char** argv)
         msg.wrench.torque.y = stForce->ssForce[4] * conversion_factor[4];
         msg.wrench.torque.z = stForce->ssForce[5] * conversion_factor[5];
         force_torque_pub->publish(msg);
+
+        RCLCPP_INFO()
       }
     }
     else
@@ -248,149 +394,4 @@ int main(int argc, char** argv)
   SerialStop(node->get_logger());
   App_Close(node->get_logger());
   return 0;
-}
-
-// ----------------------------------------------------------------------------------
-//  アプリケーション初期化
-// ----------------------------------------------------------------------------------
-//  引数  : none
-//  戻り値  : none
-// ----------------------------------------------------------------------------------
-void App_Init(void)
-{
-  int rt;
-
-  //Commポート初期化
-  gSys.com_ok = NG;
-  rt = Comm_Open(g_com_port.c_str());
-  if (rt == OK)
-  {
-    Comm_Setup(460800, PAR_NON, BIT_LEN_8, 0, 0, CHR_ETX);
-    gSys.com_ok = OK;
-  }
-
-}
-
-// ----------------------------------------------------------------------------------
-//  アプリケーション終了処理
-// ----------------------------------------------------------------------------------
-//  引数  : none
-//  戻り値  : none
-// ----------------------------------------------------------------------------------
-void App_Close(rclcpp::Logger logger)
-{
-  RCLCPP_DEBUG(logger, "Application close\n");
-
-  if (gSys.com_ok == OK)
-  {
-    Comm_Close();
-  }
-}
-
-/*********************************************************************************
- * Function Name  : HST_SendResp
- * Description    : データを整形して送信する
- * Input          : pucInput 送信データ
- *                : 送信データサイズ
- * Output         :
- * Return         :
- *********************************************************************************/
-ULONG SendData(UCHAR *pucInput, USHORT usSize)
-{
-  USHORT usCnt;
-  UCHAR ucWork;
-  UCHAR ucBCC = 0;
-  UCHAR *pucWrite = &CommSendBuff[0];
-  USHORT usRealSize;
-
-  // データ整形
-  *pucWrite = CHR_DLE; // DLE
-  pucWrite++;
-  *pucWrite = CHR_STX; // STX
-  pucWrite++;
-  usRealSize = 2;
-
-  for (usCnt = 0; usCnt < usSize; usCnt++)
-  {
-    ucWork = pucInput[usCnt];
-    if (ucWork == CHR_DLE)
-    { // データが0x10ならば0x10を付加
-      *pucWrite = CHR_DLE; // DLE付加
-      pucWrite++; // 書き込み先
-      usRealSize++; // 実サイズ
-      // BCCは計算しない!
-    }
-    *pucWrite = ucWork; // データ
-    ucBCC ^= ucWork; // BCC
-    pucWrite++; // 書き込み先
-    usRealSize++; // 実サイズ
-  }
-
-  *pucWrite = CHR_DLE; // DLE
-  pucWrite++;
-  *pucWrite = CHR_ETX; // ETX
-  ucBCC ^= CHR_ETX; // BCC計算
-  pucWrite++;
-  *pucWrite = ucBCC; // BCC付加
-  usRealSize += 3;
-
-  Comm_SendData(&CommSendBuff[0], usRealSize);
-
-  return OK;
-}
-
-void GetProductInfo(rclcpp::Logger logger)
-{
-  USHORT len;
-
-  RCLCPP_INFO(logger, "Get sensor information");
-  len = 0x04; // データ長
-  SendBuff[0] = len; // レングス
-  SendBuff[1] = 0xFF; // センサNo.
-  SendBuff[2] = CMD_GET_INF; // コマンド種別
-  SendBuff[3] = 0; // 予備
-
-  SendData(SendBuff, len);
-}
-
-void GetLimit(rclcpp::Logger logger)
-{
-  USHORT len;
-
-  RCLCPP_INFO(logger, "Get sensor limit");
-  len = 0x04;
-  SendBuff[0] = len; // レングス length
-  SendBuff[1] = 0xFF; // センサNo. Sensor no.
-  SendBuff[2] = CMD_GET_LIMIT; // コマンド種別 Command type
-  SendBuff[3] = 0; // 予備 reserve
-
-  SendData(SendBuff, len);
-}
-
-void SerialStart(rclcpp::Logger logger)
-{
-  USHORT len;
-
-  RCLCPP_INFO(logger, "Start sensor");
-  len = 0x04; // データ長
-  SendBuff[0] = len; // レングス
-  SendBuff[1] = 0xFF; // センサNo.
-  SendBuff[2] = CMD_DATA_START; // コマンド種別
-  SendBuff[3] = 0; // 予備
-
-  SendData(SendBuff, len);
-}
-
-void SerialStop(rclcpp::Logger logger)
-{
-  USHORT len;
-
-  RCLCPP_INFO(logger, "Stop sensor\n");
-  len = 0x04; // データ長
-  SendBuff[0] = len; // レングス
-  SendBuff[1] = 0xFF; // センサNo.
-  SendBuff[2] = CMD_DATA_STOP; // コマンド種別
-  SendBuff[3] = 0; // 予備
-
-  SendData(SendBuff, len);
 }

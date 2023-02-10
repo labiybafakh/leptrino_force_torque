@@ -28,6 +28,16 @@ add_executable(${PROJECT_NAME}
   src/rs_comm.cpp
 )
 
+install(DIRECTORY
+  launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(TARGETS
+  ${PROJECT_NAME}
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_target_dependencies(${PROJECT_NAME} rclcpp geometry_msgs)
 
 ament_package()
