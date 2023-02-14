@@ -56,15 +56,11 @@
 // =============================================================================
 //  マクロ定義 Defining macros
 // =============================================================================
-#define PRG_VER  "Ver 1.0.0"
+#define PRG_VER "Ver 1.0.0"
 
 // =============================================================================
 //  構造体定義 Defining structs
 // =============================================================================
-typedef struct ST_SystemInfo
-{
-  int com_ok;
-} SystemInfo;
 
 // =============================================================================
 //  プロトタイプ宣言 Declaring prototypes
@@ -80,39 +76,73 @@ typedef struct ST_SystemInfo
 // =============================================================================
 //  モジュール変数定義 Defining module variables
 // =============================================================================
-SystemInfo gSys;
-UCHAR CommRcvBuff[256];
-UCHAR CommSendBuff[1024];
-UCHAR SendBuff[512];
-double conversion_factor[FN_Num];
-
-std::string g_com_port="/dev/ttyACM0";
-int g_rate=1000;
 
 #define TEST_TIME 0
 
-class LeptrinoNode : public rclcpp::Node{
-  private:
-    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr wrench_pub_;
-    rclcpp::TimerBase::SharedPtr timer_;
-    void AppInit();
-    void App_Close(rclcpp::Logger logger);
-    ULONG SendData(UCHAR *pucInput, USHORT usSize);
-    void GetProductInfo(rclcpp::Logger logger);
-    void GetLimit(rclcpp::Logger logger);
-    void SerialStart(rclcpp::Logger logger);
-    void SerialStop(rclcpp::Logger logger);
+class LeptrinoNode : public rclcpp::Node
+{
+private:
+  rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr wrench_pub_;
+  rclcpp::TimerBase::SharedPtr timer_;
 
-  public:
-    LetrinoNode();
+  void App_Init();
+  void App_Close(rclcpp::Logger logger);
+  ULONG SendData(UCHAR *pucInput, USHORT usSize);
+  void GetProductInfo(rclcpp::Logger logger);
+  void GetLimit(rclcpp::Logger logger);
+  void SerialStart(rclcpp::Logger logger);
+  void SerialStop(rclcpp::Logger logger);
 
+  typedef struct ST_SystemInfo
+  {
+    int com_ok;
+  };
+
+  UCHAR CommRcvBuff[256];
+  UCHAR CommSendBuff[1024];
+  UCHAR SendBuff[512];
+  double conversion_factor[FN_Num];
+
+  std::string g_com_port = "/dev/ttyACM0";
+  int g_rate = 1000;
+
+  void TimerCallback(std::vector<double> &force, std::vector<double> &moment);
+
+public:
+  ST_R_DATA_GET_F *stForce;
+  ST_R_GET_INF *stGetInfo;
+  ST_R_LEP_GET_LIMIT *stGetLimit;
+  ST_SystemInfo gSys;
+  LeptrinoNode();
+};
+
+LeptrinoNode::LeptrinoNode() : Node("Leptrino")
+{
+  wrench_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("leptrino_force_torque", 10);
+  timer_ = this->create_wall_timer(
+      std::chrono::miliseconds(1), std::bind(&LeptrinoNode::TimerCallback, this);)
+               LeptrinoNode::App_Init();
+
+  if (gSys.com_ok == NG)
+  {
+    RCLCPP_ERROR(node->get_logger(), "%s open failed\n", g_com_port.c_str());
+    exit(0);
+  }
+
+  LeptrinoNode::GetProductInfo(this->get_logger());
+  LeptrinoNode::GetLimit(this->get_logger());
+}
+
+void LeptrinoNode::TimerCallback(std::vector<double> &force, std::vector<double> &moment)
+{
+  geometry_msgs::msg::WrenchStamped force;
 }
 
 void LeptrinoNode::App_Init()
 {
   int rt;
 
-  //Commポート初期化
+  // Commポート初期化
   gSys.com_ok = NG;
   rt = Comm_Open(g_com_port.c_str());
   if (rt == OK)
@@ -120,7 +150,6 @@ void LeptrinoNode::App_Init()
     Comm_Setup(460800, PAR_NON, BIT_LEN_8, 0, 0, CHR_ETX);
     gSys.com_ok = OK;
   }
-
 }
 
 void LeptrinoNode::App_Close(rclcpp::Logger logger)
@@ -152,22 +181,22 @@ ULONG LeptrinoNode::SendData(UCHAR *pucInput, USHORT usSize)
   {
     ucWork = pucInput[usCnt];
     if (ucWork == CHR_DLE)
-    { // データが0x10ならば0x10を付加
+    {                      // データが0x10ならば0x10を付加
       *pucWrite = CHR_DLE; // DLE付加
-      pucWrite++; // 書き込み先
-      usRealSize++; // 実サイズ
+      pucWrite++;          // 書き込み先
+      usRealSize++;        // 実サイズ
       // BCCは計算しない!
     }
     *pucWrite = ucWork; // データ
-    ucBCC ^= ucWork; // BCC
-    pucWrite++; // 書き込み先
-    usRealSize++; // 実サイズ
+    ucBCC ^= ucWork;    // BCC
+    pucWrite++;         // 書き込み先
+    usRealSize++;       // 実サイズ
   }
 
   *pucWrite = CHR_DLE; // DLE
   pucWrite++;
   *pucWrite = CHR_ETX; // ETX
-  ucBCC ^= CHR_ETX; // BCC計算
+  ucBCC ^= CHR_ETX;    // BCC計算
   pucWrite++;
   *pucWrite = ucBCC; // BCC付加
   usRealSize += 3;
@@ -182,11 +211,11 @@ void LeptrinoNode::GetProductInfo(rclcpp::Logger logger)
   USHORT len;
 
   RCLCPP_INFO(logger, "Get sensor information");
-  len = 0x04; // データ長
-  SendBuff[0] = len; // レングス
-  SendBuff[1] = 0xFF; // センサNo.
+  len = 0x04;                // データ長
+  SendBuff[0] = len;         // レングス
+  SendBuff[1] = 0xFF;        // センサNo.
   SendBuff[2] = CMD_GET_INF; // コマンド種別
-  SendBuff[3] = 0; // 予備
+  SendBuff[3] = 0;           // 予備
 
   SendData(SendBuff, len);
 }
@@ -197,10 +226,10 @@ void LeptrinoNode::GetLimit(rclcpp::Logger logger)
 
   RCLCPP_INFO(logger, "Get sensor limit");
   len = 0x04;
-  SendBuff[0] = len; // レングス length
-  SendBuff[1] = 0xFF; // センサNo. Sensor no.
+  SendBuff[0] = len;           // レングス length
+  SendBuff[1] = 0xFF;          // センサNo. Sensor no.
   SendBuff[2] = CMD_GET_LIMIT; // コマンド種別 Command type
-  SendBuff[3] = 0; // 予備 reserve
+  SendBuff[3] = 0;             // 予備 reserve
 
   SendData(SendBuff, len);
 }
@@ -210,11 +239,11 @@ void LeptrinoNode::SerialStart(rclcpp::Logger logger)
   USHORT len;
 
   RCLCPP_INFO(logger, "Start sensor");
-  len = 0x04; // データ長
-  SendBuff[0] = len; // レングス
-  SendBuff[1] = 0xFF; // センサNo.
+  len = 0x04;                   // データ長
+  SendBuff[0] = len;            // レングス
+  SendBuff[1] = 0xFF;           // センサNo.
   SendBuff[2] = CMD_DATA_START; // コマンド種別
-  SendBuff[3] = 0; // 予備
+  SendBuff[3] = 0;              // 予備
 
   SendData(SendBuff, len);
 }
@@ -224,21 +253,23 @@ void LeptrinoNode::SerialStop(rclcpp::Logger logger)
   USHORT len;
 
   RCLCPP_INFO(logger, "Stop sensor\n");
-  len = 0x04; // データ長
-  SendBuff[0] = len; // レングス
-  SendBuff[1] = 0xFF; // センサNo.
+  len = 0x04;                  // データ長
+  SendBuff[0] = len;           // レングス
+  SendBuff[1] = 0xFF;          // センサNo.
   SendBuff[2] = CMD_DATA_STOP; // コマンド種別
-  SendBuff[3] = 0; // 予備
+  SendBuff[3] = 0;             // 予備
 
   SendData(SendBuff, len);
 }
 
-
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::Node::SharedPtr node = rclcpp::Node::make_shared<LeptrinoNode>();
-  rclcpp::Node::SharedPtr nh_private = rclcpp::Node::make_shared("_");
+  auto node = std::make_shared<LeptrinoNode>();
+
+  // rclcpp::Node::SharedPtr nh_private = rclcpp::Node::make_shared("_");
+
+  /*
 
   // if (!nh_private->get_parameter("com_port", g_com_port))
   // {
@@ -251,7 +282,7 @@ int main(int argc, char** argv)
   //   RCLCPP_WARN(node->get_logger(), "Rate is not defined, using maximum 1.2 kHz");
   //   g_rate = 1200;
   // }
-  
+
   rclcpp::Rate rate(g_rate);
 
   std::string frame_id = "leptrino";
@@ -259,9 +290,7 @@ int main(int argc, char** argv)
 
   int rt = 0;
   //ST_RES_HEAD *stCmdHead;
-  ST_R_DATA_GET_F *stForce;
-  ST_R_GET_INF *stGetInfo;
-  ST_R_LEP_GET_LIMIT* stGetLimit;
+
 
   App_Init();
 
@@ -391,7 +420,10 @@ int main(int argc, char** argv)
     rclcpp::spin(node);
   } //while
 
+
+
   SerialStop(node->get_logger());
   App_Close(node->get_logger());
+  */
   return 0;
 }
