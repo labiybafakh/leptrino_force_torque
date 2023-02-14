@@ -45,6 +45,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <vector>
+#include <array>
 
 #include <leptrino/pCommon.h>
 #include <leptrino/rs_comm.h>
@@ -79,6 +81,10 @@
 
 #define TEST_TIME 0
 
+
+using namespace std::chrono_literals;
+using std::placeholders::_1;
+
 class LeptrinoNode : public rclcpp::Node
 {
 private:
@@ -93,9 +99,15 @@ private:
   void SerialStart(rclcpp::Logger logger);
   void SerialStop(rclcpp::Logger logger);
 
-  typedef struct ST_SystemInfo
+  struct ST_SystemInfo
   {
     int com_ok;
+  };
+
+  struct FS_data
+  {
+    std::array<double, 3> force;
+    std::array<double, 3> moment;
   };
 
   UCHAR CommRcvBuff[256];
@@ -106,13 +118,15 @@ private:
   std::string g_com_port = "/dev/ttyACM0";
   int g_rate = 1000;
 
-  void TimerCallback(std::vector<double> &force, std::vector<double> &moment);
+  void TimerCallback();
 
 public:
   ST_R_DATA_GET_F *stForce;
   ST_R_GET_INF *stGetInfo;
   ST_R_LEP_GET_LIMIT *stGetLimit;
   ST_SystemInfo gSys;
+  FS_data sensor_data;
+
   LeptrinoNode();
 };
 
@@ -120,12 +134,13 @@ LeptrinoNode::LeptrinoNode() : Node("Leptrino")
 {
   wrench_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("leptrino_force_torque", 10);
   timer_ = this->create_wall_timer(
-      std::chrono::miliseconds(1), std::bind(&LeptrinoNode::TimerCallback, this);)
-               LeptrinoNode::App_Init();
+      1ms, std::bind(&LeptrinoNode::TimerCallback, this));
+
+  LeptrinoNode::App_Init();
 
   if (gSys.com_ok == NG)
   {
-    RCLCPP_ERROR(node->get_logger(), "%s open failed\n", g_com_port.c_str());
+    RCLCPP_ERROR(this->get_logger(), "%s open failed\n", g_com_port.c_str());
     exit(0);
   }
 
@@ -133,9 +148,9 @@ LeptrinoNode::LeptrinoNode() : Node("Leptrino")
   LeptrinoNode::GetLimit(this->get_logger());
 }
 
-void LeptrinoNode::TimerCallback(std::vector<double> &force, std::vector<double> &moment)
+void LeptrinoNode::TimerCallback()
 {
-  geometry_msgs::msg::WrenchStamped force;
+
 }
 
 void LeptrinoNode::App_Init()
