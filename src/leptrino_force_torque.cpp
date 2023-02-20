@@ -98,6 +98,7 @@ private:
   void GetLimit(rclcpp::Logger logger);
   void SerialStart(rclcpp::Logger logger);
   void SerialStop(rclcpp::Logger logger);
+  void SensorNormalize(rclcpp::Logger logger);
 
   struct ST_SystemInfo
   {
@@ -147,24 +148,44 @@ LeptrinoNode::LeptrinoNode() : Node("Leptrino")
     exit(0);
   }
 
-  LeptrinoNode::GetLimit(this->get_logger());
+  // LeptrinoNode::GetLimit(this->get_logger());
+  // LeptrinoNode::SerialStart(this->get_logger());
 }
 
 LeptrinoNode::~LeptrinoNode()
+
 {
 }
 
 void LeptrinoNode::PublisherCallback()
 {
-  RCLCPP_INFO(this->get_logger(), "Hello 2");
+  if (rclcpp::ok())
+  {
+    RCLCPP_INFO(this->get_logger(), "Hello 2");
+  }
 }
 
 void LeptrinoNode::SensorCallback()
 {
-  if(rclcpp::ok()){
+
+  if(rclcpp::ok())
+  {
     RCLCPP_INFO(this->get_logger(), "Hello 1");
+
+    Comm_Rcv();
+    if (Comm_CheckRcv() != 0)
+    {
+      memset(CommRcvBuff, 0, sizeof(CommRcvBuff));
+
+      int rt = Comm_GetRcvData(CommRcvBuff);
+
+      if (rt > 0)
+      {
+      }
+    }
   }
 }
+
 void LeptrinoNode::App_Init()
 {
   int rt;
@@ -289,10 +310,18 @@ void LeptrinoNode::SerialStop(rclcpp::Logger logger)
   SendData(SendBuff, len);
 }
 
+void LeptrinoNode::SensorNormalize(rclcpp::Logger logger)
+{
+  RCLCPP_INFO(logger, "Normalizing sensor data\n");
+  int counter;
+
+  RCLCPP_INFO(logger, "Normalizing done\n");
+}
+
 int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<LeptrinoNode>();
+  rclcpp::spin(std::make_shared<LeptrinoNode>());
 
   // rclcpp::Node::SharedPtr nh_private = rclcpp::Node::make_shared("_");
 
