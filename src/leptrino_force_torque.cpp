@@ -31,16 +31,9 @@
  * Author: Mahisorn Wongphati
  * Notice: Modified & copied from Leptrino CD example source code
  * Notice: Modified for ROS2 by Vineet
+ * Notice: Ver 2.0.0 is modified for ROS2 by Muhammad Labiyb Afakh
  */
 
-// =============================================================================
-//  CFS_Sample 本体部
-//
-//          Filename: main.c
-//
-// =============================================================================
-//    Ver 1.0.0   2022/06/01
-// =============================================================================
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -55,31 +48,9 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/wrench_stamped.hpp"
 
-// =============================================================================
-//  マクロ定義 Defining macros
-// =============================================================================
-#define PRG_VER "Ver 1.0.0"
+#define PRG_VER "Ver 2.0.0"
 
-// =============================================================================
-//  構造体定義 Defining structs
-// =============================================================================
-
-// =============================================================================
-//  プロトタイプ宣言 Declaring prototypes
-// =============================================================================
-// void App_Init(void);
-// void App_Close(rclcpp::Logger logger);
-// ULONG SendData(UCHAR *pucInput, USHORT usSize);
-// void GetProductInfo(rclcpp::Logger logger);
-// void GetLimit(rclcpp::Logger logger);
-// void SerialStart(rclcpp::Logger logger);
-// void SerialStop(rclcpp::Logger logger);
-
-// =============================================================================
-//  モジュール変数定義 Defining module variables
-// =============================================================================
-
-#define TEST_TIME 0
+#define DEBUG 0
 
 using namespace std::chrono_literals;
 using std::placeholders::_1;
@@ -98,7 +69,6 @@ private:
   void GetLimit(rclcpp::Logger logger);
   void SerialStart(rclcpp::Logger logger);
   void SerialStop(rclcpp::Logger logger);
-  void SensorNormalize(rclcpp::Logger logger);
 
   struct ST_SystemInfo
   {
@@ -116,7 +86,7 @@ private:
   UCHAR SendBuff[512];
   double conversion_factor[FN_Num];
 
-  std::string g_com_port = "/dev/ttyACM0";
+  std::string g_com_port = "/dev/ttyACM1";
   int g_rate = 1000;
 
   void SensorAquistionCallback();
@@ -124,21 +94,23 @@ private:
 
 public:
   ST_R_DATA_GET_F* stForce;
+  ST_R_DATA_GET_F* grossForce;
   ST_R_GET_INF* stGetInfo;
   ST_R_LEP_GET_LIMIT* stGetLimit;
   ST_SystemInfo gSys;
   FS_data sensor_data;
+  FS_data offset;
 
   LeptrinoNode();
   ~LeptrinoNode();
   void SensorCallback();
+  void init(rclcpp::Logger logger);
+  void SensorNormalize(rclcpp::Logger logger);
 };
 
 LeptrinoNode::LeptrinoNode() : Node("Leptrino")
 {
   wrench_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("leptrino_force_torque", 10);
-  timer_acquisition_ = this->create_wall_timer(1ms, std::bind(&LeptrinoNode::SensorCallback, this));
-  timer_publisher_ = this->create_wall_timer(1ms, std::bind(&LeptrinoNode::PublisherCallback, this));
 
   LeptrinoNode::App_Init();
 
@@ -147,40 +119,77 @@ LeptrinoNode::LeptrinoNode() : Node("Leptrino")
     RCLCPP_ERROR(this->get_logger(), "%s open failed\n", g_com_port.c_str());
     exit(0);
   }
+  else
+  {
+    RCLCPP_WARN(this->get_logger(), "Leptrino is connected");
+  }
 
-  // LeptrinoNode::GetLimit(this->get_logger());
-  // LeptrinoNode::SerialStart(this->get_logger());
+  LeptrinoNode::SerialStart(this->get_logger());
+  LeptrinoNode::SensorNormalize(this->get_logger());
+
+  timer_acquisition_ = this->create_wall_timer(1ms, std::bind(&LeptrinoNode::SensorCallback, this));
+  timer_publisher_ = this->create_wall_timer(1ms, std::bind(&LeptrinoNode::PublisherCallback, this));
 }
 
 LeptrinoNode::~LeptrinoNode()
-
 {
+  LeptrinoNode::SerialStop(this->get_logger());
+  LeptrinoNode::App_Close(this->get_logger());
+  RCLCPP_WARN(this->get_logger(), "Leptrino has been stopped");
+}
+
+void LeptrinoNode::init(rclcpp::Logger logger)
+{
+  LeptrinoNode::SensorNormalize(logger);
 }
 
 void LeptrinoNode::PublisherCallback()
 {
   if (rclcpp::ok())
   {
-    RCLCPP_INFO(this->get_logger(), "Hello 2");
+    auto wrench_msg = std::make_shared<geometry_msgs::msg::WrenchStamped>();
+
+    wrench_msg->header.stamp = this->now();
+    wrench_msg->header.frame_id = "leptrino_sensor";
+    wrench_msg->wrench.force.x = sensor_data.force[1];
+    wrench_msg->wrench.force.y = sensor_data.force[2];
+    wrench_msg->wrench.force.z = sensor_data.force[3];
+    wrench_msg->wrench.torque.x = sensor_data.moment[1];
+    wrench_msg->wrench.torque.y = sensor_data.moment[2];
+    wrench_msg->wrench.torque.z = sensor_data.moment[3];
+
+    wrench_pub_->publish(*wrench_msg);
   }
 }
 
 void LeptrinoNode::SensorCallback()
 {
-
-  if(rclcpp::ok())
+  if (rclcpp::ok())
   {
-    RCLCPP_INFO(this->get_logger(), "Hello 1");
-
     Comm_Rcv();
+
     if (Comm_CheckRcv() != 0)
     {
       memset(CommRcvBuff, 0, sizeof(CommRcvBuff));
 
-      int rt = Comm_GetRcvData(CommRcvBuff);
-
+      auto rt = Comm_GetRcvData(CommRcvBuff);
       if (rt > 0)
       {
+        stForce = (ST_R_DATA_GET_F*)CommRcvBuff;
+        if (DEBUG)
+        {
+          RCLCPP_INFO(this->get_logger(), "%d,%d,%d,%d,%d,%d", stForce->ssForce[0], stForce->ssForce[1],
+                      stForce->ssForce[2], stForce->ssForce[3], stForce->ssForce[4], stForce->ssForce[5]);
+        }
+
+        sensor_data.force[1] = stForce->ssForce[0] - offset.force[1];
+        sensor_data.force[2] = stForce->ssForce[1] - offset.force[2];
+        sensor_data.force[3] = stForce->ssForce[2] - offset.force[3];
+        sensor_data.moment[1] = stForce->ssForce[3] - offset.moment[1];
+        sensor_data.moment[2] = stForce->ssForce[4] - offset.moment[2];
+        sensor_data.moment[3] = stForce->ssForce[5] - offset.moment[3];
+
+        // usleep(1000);
       }
     }
   }
@@ -313,7 +322,39 @@ void LeptrinoNode::SerialStop(rclcpp::Logger logger)
 void LeptrinoNode::SensorNormalize(rclcpp::Logger logger)
 {
   RCLCPP_INFO(logger, "Normalizing sensor data\n");
-  int counter;
+  int counter = 0;
+
+  while (counter < 1000)
+  {
+    Comm_Rcv();
+
+    if (Comm_CheckRcv() != 0)
+    {
+      memset(CommRcvBuff, 0, sizeof(CommRcvBuff));
+
+      auto rt = Comm_GetRcvData(CommRcvBuff);
+      if (rt > 0)
+      {
+        grossForce = (ST_R_DATA_GET_F*)CommRcvBuff;
+        if (DEBUG)
+        {
+          RCLCPP_INFO(this->get_logger(), "%d,%d,%d,%d,%d,%d", grossForce->ssForce[0], grossForce->ssForce[1],
+                      grossForce->ssForce[2], grossForce->ssForce[3], grossForce->ssForce[4], grossForce->ssForce[5]);
+        }
+        offset.force[1] += grossForce->ssForce[0] * 0.001;
+        offset.force[2] += grossForce->ssForce[1] * 0.001;
+        offset.force[3] += grossForce->ssForce[2] * 0.001;
+        offset.moment[1] += grossForce->ssForce[3] * 0.001;
+        offset.moment[2] += grossForce->ssForce[4] * 0.001;
+        offset.moment[3] += grossForce->ssForce[5] * 0.001;
+      }
+    }
+    counter++;
+    usleep(1000);
+  }
+
+  RCLCPP_INFO(this->get_logger(), "Offset-> Fx:%f, Fy:%f, Fx:%f, Mx:%f, My:%f, Mz:%f", offset.force[1], offset.force[2], offset.force[3],
+              offset.moment[1], offset.moment[2], offset.moment[3]);
 
   RCLCPP_INFO(logger, "Normalizing done\n");
 }
@@ -322,167 +363,6 @@ int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
   rclcpp::spin(std::make_shared<LeptrinoNode>());
-
-  // rclcpp::Node::SharedPtr nh_private = rclcpp::Node::make_shared("_");
-
-  /*
-
-  // if (!nh_private->get_parameter("com_port", g_com_port))
-  // {
-  //   RCLCPP_WARN(node->get_logger(), "Port is not defined, trying /dev/ttyACM0");
-  //   g_com_port = "/dev/ttyACM0";
-  // }
-
-  // if (!nh_private->get_parameter("rate", g_rate))
-  // {
-  //   RCLCPP_WARN(node->get_logger(), "Rate is not defined, using maximum 1.2 kHz");
-  //   g_rate = 1200;
-  // }
-
-  rclcpp::Rate rate(g_rate);
-
-  std::string frame_id = "leptrino";
-  nh_private->get_parameter("frame_id", frame_id);
-
-  int rt = 0;
-  //ST_RES_HEAD *stCmdHead;
-
-
-  App_Init();
-
-  if (gSys.com_ok == NG)
-  {
-    RCLCPP_ERROR(node->get_logger(), "%s open failed\n", g_com_port.c_str());
-    exit(0);
-  }
-
-  // 製品情報取得
-  GetProductInfo(node->get_logger());
-  while (rclcpp::ok())
-  {
-    Comm_Rcv();
-    if (Comm_CheckRcv() != 0)
-    { //受信データ有
-      CommRcvBuff[0] = 0;
-
-      rt = Comm_GetRcvData(CommRcvBuff);
-      if (rt > 0)
-      {
-        stGetInfo = (ST_R_GET_INF *)CommRcvBuff;
-        stGetInfo->scFVer[F_VER_SIZE] = 0;
-        RCLCPP_INFO(node->get_logger(), "Version: %s", stGetInfo->scFVer);
-        stGetInfo->scSerial[SERIAL_SIZE] = 0;
-        RCLCPP_INFO(node->get_logger(), "SerialNo: %s", stGetInfo->scSerial);
-        stGetInfo->scPName[P_NAME_SIZE] = 0;
-        RCLCPP_INFO(node->get_logger(), "Type: %s", stGetInfo->scPName);
-        break;
-      }
-    }
-    else
-    {
-      rate.sleep();
-    }
-  }
-
-  GetLimit(node->get_logger());
-  while (rclcpp::ok())
-  {
-    Comm_Rcv();
-    if (Comm_CheckRcv() != 0)
-    { //受信データ有
-      CommRcvBuff[0] = 0;
-
-      rt = Comm_GetRcvData(CommRcvBuff);
-      if (rt > 0)
-      {
-        stGetLimit = (ST_R_LEP_GET_LIMIT *)CommRcvBuff;
-        for (int i = 0; i < FN_Num; i++)
-        {
-          RCLCPP_INFO(node->get_logger(), "\tLimit[%d]: %f", i, stGetLimit->fLimit[i]);
-          conversion_factor[i] = stGetLimit->fLimit[i] * 1e-4;
-        }
-        break;
-      }
-    }
-    else
-    {
-      rate.sleep();
-    }
-  }
-
-  rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr force_torque_pub =
-node->create_publisher<geometry_msgs::msg::WrenchStamped>("force_torque", 1);
-
-  usleep(10000);
-
-  // 連続送信開始
-  SerialStart(node->get_logger());
-
-#if TEST_TIME
-  double dt_sum = 0;
-  int dt_count = 0;
-  rclcpp::Time start_time;
-#endif
-
-  while (rclcpp::ok())
-  {
-    Comm_Rcv();
-    if (Comm_CheckRcv() != 0)
-    { //受信データ有
-
-#if TEST_TIME
-      dt_count++;
-      dt_sum += (node->now() - start_time).toSec();
-      if (dt_sum >= 1.0)
-      {
-        ROS_INFO("Time test: read %d in %6.3f sec: %6.3f kHz", dt_count, dt_sum, (dt_count / dt_sum) * 0.001);
-        dt_count = 0;
-        dt_sum = 0.0;
-      }
-      start_time = node->now();
-#endif
-
-      memset(CommRcvBuff, 0, sizeof(CommRcvBuff));
-      rt = Comm_GetRcvData(CommRcvBuff);
-      if (rt > 0)
-      {
-        stForce = (ST_R_DATA_GET_F *)CommRcvBuff;
-        auto& clk = *node->get_clock();
-        RCLCPP_DEBUG_THROTTLE(node->get_logger(),
-                              clk,
-                              0.1,
-                              "%d,%d,%d,%d,%d,%d",
-                              stForce->ssForce[0], stForce->ssForce[1], stForce->ssForce[2], stForce->ssForce[3],
-stForce->ssForce[4], stForce->ssForce[5]
-                             );
-
-        auto msg = geometry_msgs::msg::WrenchStamped();
-        msg.header.stamp = node->now();
-        msg.header.frame_id = frame_id;
-        msg.wrench.force.x = stForce->ssForce[0] * conversion_factor[0];
-        msg.wrench.force.y = stForce->ssForce[1] * conversion_factor[1];
-        msg.wrench.force.z = stForce->ssForce[2] * conversion_factor[2];
-        msg.wrench.torque.x = stForce->ssForce[3] * conversion_factor[3];
-        msg.wrench.torque.y = stForce->ssForce[4] * conversion_factor[4];
-        msg.wrench.torque.z = stForce->ssForce[5] * conversion_factor[5];
-        force_torque_pub->publish(msg);
-
-        RCLCPP_INFO()
-      }
-    }
-    else
-    {
-      rate.sleep();
-    }
-
-    rclcpp::spin(node);
-  } //while
-
-
-
-  SerialStop(node->get_logger());
-  App_Close(node->get_logger());
-  */
   rclcpp::shutdown();
   return 0;
 }
