@@ -1,0 +1,2 @@
+leptrino_force_torque:
+  com_port:"/dev/ttyACM0"

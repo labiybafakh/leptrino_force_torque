@@ -34,6 +34,7 @@ add_executable(${PROJECT_NAME}
 
 install(DIRECTORY
   launch
+  config
   DESTINATION share/${PROJECT_NAME}
 )
 
